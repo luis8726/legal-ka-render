@@ -64,5 +64,5 @@ if run and q.strip():
     with st.spinner("Generando respuesta..."):
         ans = answer_question(q, chunks)
 
-    st.subheader("✅ Respuesta")
+    #st.subheader("✅ Respuesta")
     st.write(ans)
