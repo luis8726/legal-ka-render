@@ -1,13 +1,18 @@
 from pathlib import Path
 import os
 
-# Paths
+# En Render: /var/data
+# En local: raíz del proyecto
 BASE_DIR = Path(os.getenv("RENDER_DISK_PATH", Path(__file__).resolve().parents[1]))
-PDF_DIR = BASE_DIR / "data" / "pdfs"
-INDEX_DIR = BASE_DIR / "data" / "index"
-CHROMA_DIR = INDEX_DIR / "chroma"
+
+DATA_DIR = BASE_DIR / "data"
+INDEX_DIR = DATA_DIR / "index"
+
 BM25_PATH = INDEX_DIR / "bm25.pkl"
 META_PATH = INDEX_DIR / "meta.pkl"
+CHROMA_DIR = INDEX_DIR / "chroma"
+
+
 
 # OpenAI
 EMBED_MODEL = "text-embedding-3-large"   # 3072 dims

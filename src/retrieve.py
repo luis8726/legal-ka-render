@@ -1,12 +1,18 @@
 from __future__ import annotations
+
 import pickle
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 
-from config import CHROMA_DIR, BM25_PATH, META_PATH, TOPK_VECTOR, TOPK_BM25, TOPK_FINAL, W_VECTOR, W_BM25
+from config import (
+    CHROMA_DIR, BM25_PATH, META_PATH,
+    TOPK_VECTOR, TOPK_BM25, TOPK_FINAL,
+    W_VECTOR, W_BM25
+)
 
 def simple_tokenize_es(text: str) -> List[str]:
     return [t for t in "".join([c.lower() if c.isalnum() else " " for c in text]).split() if len(t) > 1]
@@ -21,16 +27,40 @@ def _minmax_norm(scores: np.ndarray) -> np.ndarray:
 
 class HybridRetriever:
     def __init__(self):
-        self.chroma = chromadb.PersistentClient(path=str(CHROMA_DIR), settings=Settings(anonymized_telemetry=False))
-        self.collection = self.chroma.get_or_create_collection(name="legal_chunks")
-        with open(BM25_PATH, "rb") as f:
-            obj = pickle.load(f)
-        self.bm25: BM25Okapi = obj["bm25"]
-        self.bm25_ids: List[str] = obj["ids"]
+        # ---- Debug/observabilidad (clave en Render) ----
+        print(f"📁 CHROMA_DIR = {CHROMA_DIR} | exists={CHROMA_DIR.exists()}")
+        print(f"📄 BM25_PATH  = {BM25_PATH} | exists={BM25_PATH.exists()}")
+        print(f"📄 META_PATH  = {META_PATH} | exists={META_PATH.exists()}")
 
-        with open(META_PATH, "rb") as f:
-            meta = pickle.load(f)
-        self.id_to_meta: Dict[str, Dict] = meta["id_to_meta"]
+        # ---- Chroma ----
+        self.chroma = chromadb.PersistentClient(
+            path=str(CHROMA_DIR),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        self.collection = self.chroma.get_or_create_collection(name="legal_chunks")
+
+        # ---- BM25 (opcional / modo degradado si no está) ----
+        self.bm25: Optional[BM25Okapi] = None
+        self.bm25_ids: List[str] = []
+
+        if BM25_PATH.exists():
+            with open(BM25_PATH, "rb") as f:
+                obj = pickle.load(f)
+            self.bm25 = obj.get("bm25")
+            self.bm25_ids = obj.get("ids", [])
+            print(f"✅ BM25 cargado: docs={len(self.bm25_ids)}")
+        else:
+            print("⚠️ BM25 no encontrado. Se usará solo vector search.")
+
+        # ---- Meta (para citas/páginas). También opcional ----
+        self.id_to_meta: Dict[str, Dict] = {}
+        if META_PATH.exists():
+            with open(META_PATH, "rb") as f:
+                meta = pickle.load(f)
+            self.id_to_meta = meta.get("id_to_meta", {})
+            print(f"✅ META cargada: items={len(self.id_to_meta)}")
+        else:
+            print("⚠️ META no encontrado. Se usarán metadatas de Chroma si están disponibles.")
 
     def retrieve(self, query_embedding: List[float], query_text: str) -> List[Dict]:
         # 1) Vector search
@@ -52,20 +82,24 @@ class HybridRetriever:
             for cid, doc, meta, vs in zip(v_ids, v_docs, v_metas, v_sim_n)
         }
 
-        # 2) BM25
-        q_tok = simple_tokenize_es(query_text)
-        bm25_scores = np.array(self.bm25.get_scores(q_tok), dtype=float)
-        # tomar topK_BM25 por score
-        top_idx = np.argsort(-bm25_scores)[:TOPK_BM25]
-        b_ids = [self.bm25_ids[i] for i in top_idx]
-        b_scores = bm25_scores[top_idx]
-        b_scores_n = _minmax_norm(b_scores)
-
-        bm25_map = {cid: float(sc) for cid, sc in zip(b_ids, b_scores_n)}
+        # 2) BM25 (solo si está cargado)
+        bm25_map: Dict[str, float] = {}
+        if self.bm25 is not None and self.bm25_ids:
+            q_tok = simple_tokenize_es(query_text)
+            bm25_scores = np.array(self.bm25.get_scores(q_tok), dtype=float)
+            top_idx = np.argsort(-bm25_scores)[:TOPK_BM25]
+            b_ids = [self.bm25_ids[i] for i in top_idx]
+            b_scores = bm25_scores[top_idx]
+            b_scores_n = _minmax_norm(b_scores)
+            bm25_map = {cid: float(sc) for cid, sc in zip(b_ids, b_scores_n)}
+        else:
+            # modo degradado: sin BM25
+            pass
 
         # 3) Merge + score híbrido
         candidates = set(list(vector_map.keys()) + list(bm25_map.keys()))
         results = []
+
         for cid in candidates:
             v = vector_map.get(cid, {}).get("v_score", 0.0)
             b = bm25_map.get(cid, 0.0)
