@@ -26,16 +26,7 @@ st.title("⚖️ Chalk Legal powered by TCA")
 # st.caption("RAG híbrido (Vector + BM25) con citas por página cuando es posible.")
 
 # --- Panel de estado (debug) ---
-""" 
-with st.sidebar:
-    st.header("Estado")
-    st.write("RENDER_DISK_PATH:", os.getenv("RENDER_DISK_PATH", "(no seteado)"))
-    st.write("CHROMA_DIR:", str(CHROMA_DIR))
-    st.write("BM25_PATH:", str(BM25_PATH), "exists=", BM25_PATH.exists())
-    st.write("META_PATH:", str(META_PATH), "exists=", META_PATH.exists())
-    st.divider()
-    st.caption("Si BM25/META no existen, el retriever debería degradar a solo vector.")
-"""
+
 
 @st.cache_resource
 def get_retriever() -> HybridRetriever:
