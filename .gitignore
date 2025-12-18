@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+index_bundle.tar.gz
