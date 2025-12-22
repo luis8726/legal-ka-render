@@ -4,7 +4,7 @@ import os
 import json
 import pickle
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from tqdm import tqdm
 from dotenv import load_dotenv
@@ -23,6 +23,9 @@ from config import (
     EMBED_MODEL,
     DEFAULT_CHUNK_TOKENS,
     DEFAULT_OVERLAP_TOKENS,
+    # ✅ IMPORTANTE: usar los paths desde config (Render/env vars)
+    NORMALIZED_PDF_DIR,
+    MANIFEST_PATH,
 )
 
 from pdf_extract import extract_pdf_pages
@@ -30,10 +33,8 @@ from chunking import chunk_pages_legal_aware
 
 
 # -----------------------------
-# Normalize paths
+# Constantes
 # -----------------------------
-NORMALIZED_PDF_DIR = Path("data/pdfs_normalized")
-MANIFEST_PATH = NORMALIZED_PDF_DIR / "manifest.json"
 COLLECTION_NAME = "legal_chunks"
 
 
@@ -41,13 +42,17 @@ COLLECTION_NAME = "legal_chunks"
 # Utils
 # -----------------------------
 def simple_tokenize_es(text: str) -> List[str]:
-    return [t for t in "".join([c.lower() if c.isalnum() else " " for c in text]).split() if len(t) > 1]
+    # Tokenizador simple para BM25 (suficiente para ~9 PDFs)
+    return [
+        t
+        for t in "".join([c.lower() if c.isalnum() else " " for c in text]).split()
+        if len(t) > 1
+    ]
 
 
 def infer_doc_id(pdf_path: Path) -> str:
-    # doc_id estable desde nombre de archivo
-    stem = pdf_path.stem.lower().strip()
-    stem = stem.replace(" ", "_")
+    # doc_id estable desde nombre de archivo (fallback)
+    stem = pdf_path.stem.lower().strip().replace(" ", "_")
     return stem
 
 
@@ -65,11 +70,11 @@ def build_manifest_by_normalized_file(rows: List[Dict]) -> Dict[str, Dict]:
     for r in rows:
         nf = r.get("normalized_file")
         if nf:
-            out[nf] = r
+            out[str(nf)] = r
     return out
 
 
-def pick_pdf_dir_and_manifest() -> tuple[Path, Dict[str, Dict]]:
+def pick_pdf_dir_and_manifest() -> Tuple[Path, Dict[str, Dict]]:
     """
     Usa PDFs normalizados si están disponibles; sino fallback a PDF_DIR.
     """
@@ -124,6 +129,20 @@ def norma_meta_fallback(pdf_path: Path) -> Dict[str, str]:
     }
 
 
+def stable_doc_id(pdf_path: Path, using_manifest: bool, norma_meta: Dict[str, str]) -> str:
+    """
+    ✅ doc_id estable:
+    - Si hay manifest con siglas+numero -> "<siglas>_<numero>"
+    - Si no -> fallback al nombre del archivo
+    """
+    if using_manifest:
+        siglas = (norma_meta.get("siglas") or "").strip().lower()
+        numero = (norma_meta.get("numero") or "").strip().lower()
+        if siglas and numero:
+            return f"{siglas}_{numero}"
+    return infer_doc_id(pdf_path)
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -133,6 +152,7 @@ def main():
     if not api_key:
         raise RuntimeError("Falta OPENAI_API_KEY. Copiá .env.example a .env y completalo.")
 
+    # Persistencia (local o Render Disk según config/env)
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -154,6 +174,8 @@ def main():
 
     print(f"📄 PDFs dir: {pdf_dir}")
     print(f"🧾 Manifest: {'OK' if using_manifest else 'NO (fallback)'}")
+    if using_manifest:
+        print(f"🧾 Manifest path: {MANIFEST_PATH}")
 
     all_texts: List[str] = []
     all_ids: List[str] = []
@@ -161,7 +183,7 @@ def main():
     bm25_docs_tokens: List[List[str]] = []
     bm25_ids: List[str] = []
 
-    # Limpiar colección para re-ingesta
+    # Limpiar colección para re-ingesta completa
     try:
         existing = collection.get()
         if existing and existing.get("ids"):
@@ -170,15 +192,17 @@ def main():
         pass
 
     for pdf_path in tqdm(pdf_files, desc="Ingestando PDFs"):
-        doc_id = infer_doc_id(pdf_path)
-
-        pages = extract_pdf_pages(str(pdf_path))
-        pages_tuples = [(p.page, p.text) for p in pages]
-
+        # Meta por PDF
         if using_manifest:
             norma_meta = norma_meta_from_manifest(pdf_path, manifest_map)
         else:
             norma_meta = norma_meta_fallback(pdf_path)
+
+        # ✅ doc_id estable si hay manifest
+        doc_id = stable_doc_id(pdf_path, using_manifest, norma_meta)
+
+        pages = extract_pdf_pages(str(pdf_path))
+        pages_tuples = [(p.page, p.text) for p in pages]
 
         chunks = chunk_pages_legal_aware(
             doc_id=doc_id,
