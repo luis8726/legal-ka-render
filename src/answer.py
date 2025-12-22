@@ -3,19 +3,31 @@ from typing import List, Dict, Optional
 from openai import OpenAI
 from config import LLM_MODEL
 
+
 SYSTEM = """
 Sos un asistente legal especializado en derecho societario argentino.
-Respondés únicamente con base en el CONTEXTO recuperado (fragmentos de documentos).
 
-Reglas:
-- Si el contexto NO alcanza para responder con certeza, decí: "No surge del material provisto".
-- No inventes artículos, números, jurisprudencia, fechas ni definiciones.
-- Citá siempre la fuente por afirmación relevante, usando el formato: (doc_id, pág X, chunk_id).
+Respondés exclusivamente en base al CONTEXTO LEGAL recuperado (fragmentos de documentos).
+No usás conocimiento externo ni memoria como fuente jurídica.
+
+Reglas de oro:
+- NO inventes artículos, textos, números, fechas ni definiciones.
+- Si el texto completo de un artículo no está íntegramente en el contexto:
+  * Explicá con precisión QUÉ SÍ surge del material aportado.
+  * Aclaralo expresamente en la respuesta.
+- Solo usá "No surge del material provisto" cuando:
+  * No exista ningún fragmento relevante en el contexto.
+- Citá siempre las fuentes por afirmación relevante.
 - Si hay conflicto entre fuentes, señalalo y citá ambas.
-- Redactá en español jurídico claro y estructurado:
-  Respuesta → Fundamento (con citas) → Alcances/Advertencias → Próximos pasos.
-- La memoria conversacional NO es fuente legal.
-- No es asesoramiento legal definitivo; es información basada en documentos provistos.
+
+Formato obligatorio:
+Breve resumen clave →
+Respuesta →
+Fundamento (con citas) →
+Alcances / Advertencias →
+Próximos pasos
+
+Esto no constituye asesoramiento legal definitivo.
 """.strip()
 
 
@@ -40,8 +52,8 @@ def build_context(chunks: List[Dict]) -> str:
             f"chunk_id={cid}",
         ]
 
-        if meta.get("article"):
-            header_bits.append(f"art={meta.get('article')}")
+        if meta.get("articulo_nro"):
+            header_bits.append(f"art={meta.get('articulo_nro')}")
 
         if meta.get("section"):
             header_bits.append("section=" + meta.get("section")[:80].replace("\n", " "))
@@ -62,6 +74,20 @@ def answer_question(
     recent_messages: Optional[List[Dict]] = None,
 ) -> str:
     client = OpenAI()
+
+    if not chunks:
+        # Caso extremo: no hay ningún fragmento relevante
+        return (
+            "Breve resumen clave\n"
+            "No surge información relevante del material provisto.\n\n"
+            "Respuesta\n"
+            "No surge del material provisto contenido aplicable a la consulta formulada.\n\n"
+            "Alcances / Advertencias\n"
+            "La respuesta se limita estrictamente a los documentos incorporados al contexto.\n\n"
+            "Próximos pasos\n"
+            "Podés уточar la norma, artículo o documento específico para ampliar la búsqueda."
+        )
+
     context = build_context(chunks)
 
     memory_block = ""
@@ -77,18 +103,23 @@ def answer_question(
     user_prompt = f"""
 {memory_block}
 
-CONTEXTO LEGAL (usar exclusivamente esto como fuente):
+CONTEXTO LEGAL (única fuente jurídica):
 {context}
 
 PREGUNTA:
 {question}
 
 INSTRUCCIONES:
-- Respondé solo con el CONTEXTO LEGAL.
-- No uses la memoria como fuente jurídica.
-- Cada afirmación relevante debe incluir una cita.
-- Si no surge del material provisto, decilo explícitamente.
-- Estructura: Respuesta → Fundamento → Alcances/Advertencias → Próximos pasos.
+- Respondé únicamente con el CONTEXTO LEGAL.
+- Si el texto completo no está, explicá claramente el alcance de lo que sí surge.
+- Cada afirmación relevante debe tener cita.
+- No inventes ni completes con conocimiento externo.
+- Estructura obligatoria:
+  Breve resumen clave →
+  Respuesta →
+  Fundamento (con citas) →
+  Alcances / Advertencias →
+  Próximos pasos
 """.strip()
 
     resp = client.responses.create(

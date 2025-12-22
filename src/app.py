@@ -79,22 +79,67 @@ if q and q.strip():
     with st.chat_message("user"):
         st.write(q)
 
-    # 2) Generar respuesta (sin reenviar historial => no suma tokens por historial)
+    # 2) Generar respuesta
     with st.chat_message("assistant"):
-        with st.spinner("Procesando la consulta..."):
+
+        # Embedding
+        with st.spinner("Procesando la consulta."):
             emb = client.embeddings.create(model=EMBED_MODEL, input=q).data[0].embedding
 
-        with st.spinner("Recuperando contexto..."):
+        # Retrieval
+        with st.spinner("Recuperando contexto."):
             chunks = retriever.retrieve(query_embedding=emb, query_text=q)
 
-        with st.spinner("Generando respuesta..."):
-            ans = answer_question(
-                q,
-                chunks,
-                memory_summary=st.session_state.get("memory_summary"),
-                recent_messages=st.session_state.messages[-4:],
-            )
+        # Detectar exact match (artículo explícito)
+        exact_chunk = None
+        if chunks and chunks[0].get("match_type") == "exact_metadata":
+            exact_chunk = chunks[0]
 
+        # (Opcional) Encabezado legal cuando hay exact match
+        if exact_chunk:
+            meta = exact_chunk.get("meta", {}) or {}
+            documento = meta.get("documento_nombre") or meta.get("source_file") or "Documento"
+            art = meta.get("articulo_nro") or meta.get("article") or ""
+            numero = meta.get("numero") or ""
+            p1 = meta.get("page_start")
+            p2 = meta.get("page_end")
+            fuente = meta.get("source_file") or meta.get("doc_id") or ""
+
+            header = f"**{documento}"
+            if art:
+                header += f" – Artículo {art}"
+            if numero:
+                header += f" (Ley {numero})"
+            header += "**"
+
+            footer = []
+            if fuente:
+                footer.append(f"Fuente: {fuente}")
+            if p1 is not None and p2 is not None:
+                footer.append(f"páginas {p1}–{p2}")
+
+            if footer:
+                st.markdown(header + "  \n" + f"*{' · '.join(footer)}*")
+            else:
+                st.markdown(header)
+
+        # LLM Answer
+        with st.spinner("Generando respuesta."):
+            # Si es exact match: usamos SOLO ese chunk y sin historial/memoria
+            if exact_chunk:
+                ans = answer_question(
+                    q,
+                    [exact_chunk],
+                    memory_summary=None,
+                    recent_messages=None,
+                )
+            else:
+                ans = answer_question(
+                    q,
+                    chunks,
+                    memory_summary=st.session_state.get("memory_summary"),
+                    recent_messages=st.session_state.messages[-4:],
+                )
 
         st.write(ans)
 

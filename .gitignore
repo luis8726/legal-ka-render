@@ -8,3 +8,14 @@ __pycache__/
 venv/
 
 index_bundle.tar.gz
+
+
+.env
+__pycache__/
+*.pyc
+
+# si no querés subir índices/persistencia
+data/pdfs_normalized/
+data/index/
+chroma/
+*.pkl
