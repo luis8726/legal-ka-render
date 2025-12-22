@@ -3,46 +3,35 @@ set -euo pipefail
 
 echo "🚀 Iniciando Legal KA..."
 
-# -----------------------------
-# 1) Disk persistente (Render)
-# -----------------------------
 DATA_ROOT="${RENDER_DISK_PATH:-/var/data}"
 BUNDLE_URL="${INDEX_BUNDLE_URL:-}"
 
-# ✅ Nuevo: Permitimos definir INDEX_DIR desde Render (recomendado)
-# Si no está seteado, usamos /var/data/index
+# Donde queremos que termine el índice
 INDEX_ROOT="${INDEX_DIR:-$DATA_ROOT/index}"
 
-# También permitimos granularidad
-CHROMA_DIR_ENV="${CHROMA_DIR:-$INDEX_ROOT/chroma}"
-BM25_FILE_ENV="${BM25_PATH:-$INDEX_ROOT/bm25.pkl}"
-META_FILE_ENV="${META_PATH:-$INDEX_ROOT/meta.pkl}"
+# ✅ Todo adentro de INDEX_ROOT (coherente con el bundle)
+CHROMA_DIR="${CHROMA_DIR:-$INDEX_ROOT/chroma}"
+BM25_PATH="${BM25_PATH:-$INDEX_ROOT/bm25.pkl}"
+META_PATH="${META_PATH:-$INDEX_ROOT/meta.pkl}"
 
-echo "📁 DATA_ROOT        = $DATA_ROOT"
-echo "📁 INDEX_ROOT       = $INDEX_ROOT"
-echo "📁 CHROMA_DIR       = $CHROMA_DIR_ENV"
-echo "📄 BM25_PATH        = $BM25_FILE_ENV"
-echo "📄 META_PATH        = $META_FILE_ENV"
-echo "🌐 INDEX_BUNDLE_URL = ${BUNDLE_URL:+(set)}"
+echo "📁 DATA_ROOT   = $DATA_ROOT"
+echo "📁 INDEX_ROOT  = $INDEX_ROOT"
+echo "📁 CHROMA_DIR  = $CHROMA_DIR"
+echo "📄 BM25_PATH   = $BM25_PATH"
+echo "📄 META_PATH   = $META_PATH"
+echo "🌐 BUNDLE_URL  = ${BUNDLE_URL:+(set)}"
 
 mkdir -p "$DATA_ROOT"
 mkdir -p "$INDEX_ROOT"
 
-# Exportamos para que config.py los tome sí o sí
+# Export para que tu config.py use estos paths
 export INDEX_DIR="$INDEX_ROOT"
-export CHROMA_DIR="$CHROMA_DIR_ENV"
-export BM25_PATH="$BM25_FILE_ENV"
-export META_PATH="$META_FILE_ENV"
+export CHROMA_DIR="$CHROMA_DIR"
+export BM25_PATH="$BM25_PATH"
+export META_PATH="$META_PATH"
 
-# -----------------------------
-# 2) ¿Hay que restaurar?
-# -----------------------------
 need_restore="false"
-
-# Validación mínima: existen BM25 y META, y carpeta chroma
-if [ ! -d "$CHROMA_DIR_ENV" ]; then
-  need_restore="true"
-elif [ ! -f "$BM25_FILE_ENV" ] || [ ! -f "$META_FILE_ENV" ]; then
+if [ ! -d "$CHROMA_DIR" ] || [ ! -f "$BM25_PATH" ] || [ ! -f "$META_PATH" ]; then
   need_restore="true"
 fi
 
@@ -54,18 +43,13 @@ if [ "$need_restore" = "true" ]; then
     exit 1
   fi
 
-  # Limpieza
   rm -rf "$INDEX_ROOT"
   mkdir -p "$INDEX_ROOT"
 
   curl -L "$BUNDLE_URL" -o /tmp/index_bundle.tar.gz
   tar -xzf /tmp/index_bundle.tar.gz -C "$DATA_ROOT"
 
-  # -----------------------------
-  # 3) Compatibilidad con bundles
-  #    a) /var/data/data/index/...
-  #    b) /var/data/index/...
-  # -----------------------------
+  # Si el bundle trae data/index, lo movemos a INDEX_ROOT
   if [ -d "$DATA_ROOT/data/index" ] && [ ! -d "$INDEX_ROOT/chroma" ]; then
     echo "🔁 Bundle trae estructura data/index. Moviendo a INDEX_ROOT..."
     rm -rf "$INDEX_ROOT"
@@ -73,11 +57,13 @@ if [ "$need_restore" = "true" ]; then
     mv "$DATA_ROOT/data/index" "$INDEX_ROOT"
   fi
 
-  # Validación post-restore
-  if [ ! -d "$CHROMA_DIR_ENV" ] || [ ! -f "$BM25_FILE_ENV" ] || [ ! -f "$META_FILE_ENV" ]; then
+  # Validación final (coherente)
+  if [ ! -d "$CHROMA_DIR" ] || [ ! -f "$BM25_PATH" ] || [ ! -f "$META_PATH" ]; then
     echo "❌ ERROR: Después de extraer, el índice sigue incompleto."
-    echo "   Esperaba: $CHROMA_DIR_ENV y archivos bm25/meta en $INDEX_ROOT"
-    echo "   Revisá la estructura dentro del bundle."
+    echo "   Esperaba: $CHROMA_DIR y bm25/meta en $INDEX_ROOT"
+    echo "   Estructura real:"
+    ls -la "$DATA_ROOT" || true
+    ls -la "$INDEX_ROOT" || true
     exit 1
   fi
 
@@ -86,9 +72,4 @@ else
   echo "✅ Índice ya presente y completo. No se descarga nada."
 fi
 
-# -----------------------------
-# 4) Arrancar Streamlit
-# -----------------------------
-streamlit run src/app.py \
-  --server.port "${PORT:-8501}" \
-  --server.address 0.0.0.0
+streamlit run src/app.py --server.port "${PORT:-8501}" --server.address 0.0.0.0
